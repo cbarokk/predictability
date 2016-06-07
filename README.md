@@ -11,7 +11,12 @@ $ luarocks install optim
 $ luarocks install nn
 ```
 
+Then, you need to patch 2 files in the nn package for BatchNormalization to work with our cloned rnn implementation.
 
+```bash
+$ cp nn_path/Container.lua /<path>/<to>/torch/install/share/lua/5.1/nn/Container.lua
+$ cp nn_path/BatchNormalization.lua /<path>/<to>/torch/install/share/lua/5.1/nn/BatchNormalization.lua
+```
 
 ## training
 
