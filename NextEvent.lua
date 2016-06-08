@@ -48,10 +48,10 @@ function NextEvent:next_batch()
   local num_events = #seqs[1]
   
   local x = torch.DoubleTensor(num_events-1, #seqs, theta_size):zero()
-  local e_x = torch.IntTensor(num_events-1, #seqs):zero()
+  local e_x = torch.LongTensor(num_events-1, #seqs):zero()
   
-  local y = torch.IntTensor(num_events-1, #seqs):zero()
-  local e_y = torch.IntTensor(num_events-1, #seqs):fill(1)
+  local y = torch.LongTensor(num_events-1, #seqs):zero()
+  local e_y = torch.LongTensor(num_events-1, #seqs):fill(1)
 
   for s=1,#seqs do
     local events = seqs[s]
