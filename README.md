@@ -9,6 +9,7 @@ See the Torch installation documentation for more details. After Torch is instal
 $ luarocks install nngraph
 $ luarocks install optim
 $ luarocks install nn
+$ luarocks install redis-lua
 ```
 
 Then, you need to patch 2 files in the nn package for BatchNormalization to work with our cloned rnn implementation.
