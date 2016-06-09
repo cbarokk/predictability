@@ -82,6 +82,9 @@ while true do
     local seq_x_score = torch.DoubleTensor(len_seq, opt.batch_size)
     local seq_ex_score = torch.DoubleTensor(len_seq, opt.batch_size)
   
+    local seq_x_pred = torch.DoubleTensor(len_seq, opt.batch_size, opt.num_time_slots)
+    local seq_ex_pred = torch.DoubleTensor(len_seq, opt.batch_size, opt.num_events)
+
     if opt.gpuid > -1 then 
       seq_x_score = seq_x_score:cuda()
       seq_ex_score = seq_ex_score:cuda()
@@ -92,8 +95,11 @@ while true do
     local lst
     for t=1, len_seq do
       lst = protos.rnn:forward{x[t], e_x[t], unpack(current_state)}
+      
+      seq_x_pred[t] = lst[#lst-1]
+      seq_ex_pred[t] = lst[#lst]
+      
       seq_x_score[t] = get_score(lst[#lst-1], y[t])
-
       seq_ex_score[t] = get_score(lst[#lst], e_y[t])
       current_state = {}
       for i=1,2*#opt.rnn_layers do table.insert(current_state, lst[i]) end
@@ -117,6 +123,18 @@ while true do
       end
       --print (avg_scores[j], seq)
       redis_client:zadd("predictability", avg_scores[j], seq)
+                  
+      local time_pred_f = torch.DiskFile('predictions/time_pred_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
+      local event_pred_f = torch.DiskFile('predictions/event_pred_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
+      local time_truth_f = torch.DiskFile('predictions/time_truth_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
+      local event_truth_f = torch.DiskFile('predictions/event_truth_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
+
+      for t=1, opt.len_seq-1 do
+        time_pred_f:writeDouble(seq_x_pred[t][j]:exp():storage())
+        event_pred_f:writeDouble(seq_ex_pred[t][j]:exp():storage())
+        time_truth_f:writeLong(y[t][j])
+        event_truth_f:writeLong(e_y[t][j])  
+      end
     end
   end
   
