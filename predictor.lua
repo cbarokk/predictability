@@ -149,7 +149,7 @@ while true do
           end
           event_pred_f:writeString(tostring(seq_ex_pred[t][j][k]))
         end
-        e_pred_f:writeString("\n")
+        event_pred_f:writeString("\n")
 
         time_truth_f:writeLong(y[t][j])
         event_truth_f:writeLong(e_y[t][j])  
