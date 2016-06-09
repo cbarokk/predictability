@@ -106,7 +106,7 @@ while true do
     end
     
     local iqr_x = get_iqr(seq_x_score, q1, q3):div(opt.num_time_slots)[1]
-    local iqr_ex = get_iqr(seq_ex_score, q1, q3):div(opt.num_time_slots)[1]
+    local iqr_ex = get_iqr(seq_ex_score, q1, q3):div(opt.num_events)[1]
   
     -- todo: redis_client:zadd("predictability:" .. loader.sources[1], avg_scores[j], seq)
 
@@ -124,10 +124,12 @@ while true do
       --print (avg_scores[j], seq)
       redis_client:zadd("predictability", avg_scores[j], seq)
                   
-      local time_pred_f = torch.DiskFile('predictions/time_pred_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
-      local event_pred_f = torch.DiskFile('predictions/event_pred_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
-      local time_truth_f = torch.DiskFile('predictions/time_truth_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
-      local event_truth_f = torch.DiskFile('predictions/event_truth_' .. string.gsub(loader.sources[j]:split("/")[2], "%s+", ""), 'w')
+      local id = string.gsub(loader.sources[j]:split("/")[2], "%s+", "")
+      
+      local time_pred_f = torch.DiskFile('predictions/time_pred_' .. id, 'w')
+      local event_pred_f = torch.DiskFile('predictions/event_pred_' .. id, 'w')
+      local time_truth_f = torch.DiskFile('predictions/time_truth_' .. id, 'w')
+      local event_truth_f = torch.DiskFile('predictions/event_truth_' .. id, 'w')
 
       for t=1, opt.len_seq-1 do
         time_pred_f:writeDouble(seq_x_pred[t][j]:exp():storage())
