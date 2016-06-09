@@ -114,6 +114,9 @@ while true do
     local avg_scores = 0.5*(iqr_x + iqr_ex)
     --print (avg_scores)
   
+    seq_x_pred:exp() -- so it sums to 1
+    seq_ex_pred:exp()
+  
     for j=1,#loader.batch do
       print (count, loader.sources[j], len_seq)
 
@@ -132,8 +135,22 @@ while true do
       local event_truth_f = torch.DiskFile('predictions/event_truth_' .. id, 'w')
 
       for t=1, opt.len_seq-1 do
-        time_pred_f:writeDouble(seq_x_pred[t][j]:exp():storage())
-        event_pred_f:writeDouble(seq_ex_pred[t][j]:exp():storage())
+        for k=1, opt.num_time_slots do
+          if k>1 then
+            time_pred_f:writeString(", ")
+          end
+          time_pred_f:writeString(tostring(seq_x_pred[t][j][k]))
+        end
+        time_pred_f:writeString("\n")
+
+        for k=1, opt.num_events do
+          if k>1 then
+            event_pred_f:writeString(", ")
+          end
+          event_pred_f:writeString(tostring(seq_ex_pred[t][j][k]))
+        end
+        e_pred_f:writeString("\n")
+
         time_truth_f:writeLong(y[t][j])
         event_truth_f:writeLong(e_y[t][j])  
       end
