@@ -66,6 +66,56 @@ local function get_iqr(seq_score, q1, q3)
   return q1_q3:mean(1)
 end
 
+local function get_event_score(preds, index_truth)
+  local s = -math.log(0.005)
+  local score = preds:gather(2, index_truth:view(opt.batch_size,1)):mul(-1):div(s)
+  return score
+end
+
+local function get_AUC(y)
+    local area = torch.DoubleTensor(opt.batch_size):fill(0)
+    local N = y:size()[2]
+    for i = 2, N do
+      area:add(y:sub(1,-1, i-1,i):clone():sum(2):div(2))  --simplified formula because all intervals are of width 1
+    end
+    area:div(N-1)  --divide by the number of intervals to scale AUC to 0-1  
+    return area
+end 
+
+local function get_time_score(preds, index_truth)
+  -- Look at probabilities to the left and right of the truth 
+ 
+  preds:exp()
+  
+  local tmp = torch.cat({preds, preds, preds},2)
+  local N = opt.num_time_slots
+  -- Find cumulative probabilities at increasing distance from the truth
+  
+  for i=1, opt.batch_size do
+    preds:sub(i,i, 1, N/2):copy(tmp:sub(i,i, N/2+index_truth[i], N+index_truth[i]-1))
+    preds:sub(i,i, N/2+1, -1):copy(tmp:sub(i,i, N+index_truth[i], N+index_truth[i]+N/2-1))
+  end
+  
+  local cum_probs = torch.DoubleTensor(opt.batch_size, N/2+1)
+    
+  cum_probs:sub(1,-1, 1,1):copy(preds:sub(1,-1, N/2+1, N/2+1))
+  
+  for i=2, N/2 do
+    cum_probs:sub(1,-1, i,i):copy(cum_probs:sub(1,-1, i-1,i-1)):add(preds:sub(1,-1, N/2+1 - (i-1), N/2+1 - (i-1))):add(preds:sub(1,-1, N/2+1 + i-1, N/2+1 + i-1))
+  end  
+  cum_probs:sub(1,-1, -1, -1):fill(1)
+  
+  -- Calculate AUC scaled to 0-1 interval
+  local auc = get_AUC(cum_probs) -- I used a built-in function in R using the 'trapezoidal rule'; I think this can be implemented in lua as below
+  local score = 1-auc
+  
+  return score
+
+
+end
+
+
+
 local count = 0
 
 while true do
@@ -75,19 +125,18 @@ while true do
   local x, y, e_x, e_y = loader:next_batch()
   local len_seq = x:size()[1]
   
+  local time_score_f = torch.DiskFile('scores/time_score_batch_' .. count, 'w')
+  local event_score_f = torch.DiskFile('scores/event_score_batch_' .. count, 'w')
+  
+  print ("batch", count)
+  
   if len_seq > 5 then
-    local q1 = math.ceil(len_seq*0.25)
-    local q3 = math.floor(len_seq*0.75)
+    local event_pred_score = torch.DoubleTensor(len_seq, opt.batch_size)
+    local time_pred_score = torch.DoubleTensor(len_seq, opt.batch_size)
   
-    local seq_x_score = torch.DoubleTensor(len_seq, opt.batch_size)
-    local seq_ex_score = torch.DoubleTensor(len_seq, opt.batch_size)
-  
-    local seq_x_pred = torch.DoubleTensor(len_seq, opt.batch_size, opt.num_time_slots)
-    local seq_ex_pred = torch.DoubleTensor(len_seq, opt.batch_size, opt.num_events)
-
     if opt.gpuid > -1 then 
-      seq_x_score = seq_x_score:cuda()
-      seq_ex_score = seq_ex_score:cuda()
+      event_pred_score = event_pred_score:cuda()
+      time_pred_score = time_pred_score:cuda()
     end
   
     local current_state = init_state()
@@ -96,93 +145,38 @@ while true do
     for t=1, len_seq do
       lst = protos.rnn:forward{x[t], e_x[t], unpack(current_state)}
       
-      seq_x_pred[t] = lst[#lst-1]
-      seq_ex_pred[t] = lst[#lst]
-      
-      seq_x_score[t] = get_score(lst[#lst-1], y[t])
-      seq_ex_score[t] = get_score(lst[#lst], e_y[t])
+      -- Calculate predictability scores for each event in each sequence --
+      event_pred_score[t] = get_event_score(lst[#lst], e_y[t]) 
+      time_pred_score[t] = get_time_score(lst[#lst-1], y[t])
+  
       current_state = {}
       for i=1,2*#opt.rnn_layers do table.insert(current_state, lst[i]) end
     end
-    
-    local iqr_x = get_iqr(seq_x_score, q1, q3):div(opt.num_time_slots)[1]
-    local iqr_ex = get_iqr(seq_ex_score, q1, q3):div(opt.num_events)[1]
-  
-    -- todo: redis_client:zadd("predictability:" .. loader.sources[1], avg_scores[j], seq)
-
-  
-    local avg_scores = 0.5*(iqr_x + iqr_ex)
-    --print (avg_scores)
-  
-    seq_x_pred:exp() -- so it sums to 1
-    seq_ex_pred:exp()
   
     for j=1,#loader.batch do
-      print (count, loader.sources[j], len_seq)
-
-      local seq = ""  
-      for i=1,#loader.batch[j]-1 do
-        seq = seq .. "," .. loader.batch[j][i][1] .. "-" .. opt.event_inv_mapping[tonumber(loader.batch[j][i][2])]
-      end
-      --print (avg_scores[j], seq)
-      redis_client:zadd("predictability", avg_scores[j], seq)
-                  
       local id = string.gsub(loader.sources[j]:split("/")[2], "%s+", "")
       
-      local time_pred_f = torch.DiskFile('predictions/time_pred_' .. id, 'w')
-      local event_pred_f = torch.DiskFile('predictions/event_pred_' .. id, 'w')
-      local time_truth_f = torch.DiskFile('predictions/time_truth_' .. id, 'w')
-      local event_truth_f = torch.DiskFile('predictions/event_truth_' .. id, 'w')
-
-      for t=1, opt.len_seq-1 do
-        for k=1, opt.num_time_slots do
-          if k>1 then
-            time_pred_f:writeString(", ")
-          end
-          time_pred_f:writeString(tostring(seq_x_pred[t][j][k]))
-        end
-        time_pred_f:writeString("\n")
-
-        for k=1, opt.num_events do
-          if k>1 then
-            event_pred_f:writeString(", ")
-          end
-          event_pred_f:writeString(tostring(seq_ex_pred[t][j][k]))
-        end
-        event_pred_f:writeString("\n")
-
-        time_truth_f:writeLong(y[t][j])
-        event_truth_f:writeLong(e_y[t][j])  
+      time_score_f:writeString(id)
+      event_score_f:writeString(id)
+      if j < #loader.batch then
+        time_score_f:writeString(", ")
+        event_score_f:writeString(", ")
       end
     end
-  end
+    time_score_f:writeString("\n")
+    event_score_f:writeString("\n")
   
-end
-
-
-
---[[
-    if t > 1 then
-      print ("e_x[t]", opt.event_inv_mapping[e_x[t][1] ], opt.event_inv_mapping[last_pred])
-    else 
-      print ("e_x[t]", opt.event_inv_mapping[e_x[t][1] ])
+    for t=1, opt.len_seq-1 do
+      for j=1,#loader.batch do
+        if j>1 then
+          time_score_f:writeString(", ")
+          event_score_f:writeString(", ")
+        end
+        time_score_f:writeString(tostring(time_pred_score[t][j]))
+        event_score_f:writeString(tostring(event_pred_score[t][j]))
+      end
+      time_score_f:writeString("\n")
+      event_score_f:writeString("\n")
     end
-    
-    lst = protos.rnn:forward{x[t], e_x[t], unpack(current_state)}
-   
-    local e_y_probs = lst[#lst]
-    local e_y_probs_sorted, e_y_probs_idx = torch.sort(e_y_probs, 2, true) -- sort along 2nd dim, true = in descending order
-    
-    local y_probs = lst[#lst-1]
-    --smooth_probs(y_probs, opt.window_size)
-    
-    -- The predictions for the events are in e_y_probs_sorted (the indices are in e_y_probs_idx) 
-    -- The predictions for the time slots are in y_probs (not sorted)
-    
-    
-    
-    last_pred = e_y_probs_idx[1][1]
-
-]]--
-
-
+  end
+end
