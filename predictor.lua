@@ -69,6 +69,7 @@ end
 local function get_event_score(preds, index_truth)
   local s = -math.log(0.005)
   local score = preds:gather(2, index_truth:view(opt.batch_size,1)):mul(-1):div(s)
+  score:cmin(1.0)
   return score
 end
 
